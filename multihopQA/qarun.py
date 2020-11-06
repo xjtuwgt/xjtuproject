@@ -122,40 +122,26 @@ def main(args):
     # Write logs to checkpoint and console
     set_logger(args)
     if args.cuda:
-        if args.do_debug:
-            if args.gpu_num > 1:
-                device_ids, used_memory = gpu_setting(args.gpu_num)
+        if args.gpu_num > 1:
+            logging.info("Using GPU!")
+            available_device_count = torch.cuda.device_count()
+            # ++++++++++++++++++++++++++++++++++
+            gpu_setting(available_device_count)
+            # ++++++++++++++++++++++++++++++++++
+            logging.info('GPU number is {}'.format(available_device_count))
+            if args.gpu_num > available_device_count:
+                args.gpu_num = available_device_count
+                device_ids = []
+                for i in range(args.gpu_num - 1, -1, -1):
+                    device_ids.append(i)
+                    device = torch.device("cuda:%d" % i)
             else:
-                device_ids, used_memory = gpu_setting()
-            if used_memory > 100:
-                logging.info('Using memory = {}'.format(used_memory))
-            if device_ids is not None:
-                device = torch.device('cuda:{}'.format(device_ids[0]))
-            else:
-                device = torch.device('cuda:0')
-            logging.info('Set the cuda with idxes = {}'.format(device_ids))
-            logging.info('cuda setting {}'.format(device))
-        else:
-            if args.gpu_num > 1:
-                logging.info("Using GPU!")
-                available_device_count = torch.cuda.device_count()
-                # ++++++++++++++++++++++++++++++++++
-                gpu_setting(available_device_count)
-                # ++++++++++++++++++++++++++++++++++
-                logging.info('GPU number is {}'.format(available_device_count))
-                if args.gpu_num > available_device_count:
-                    args.gpu_num = available_device_count
-                    device_ids = []
-                    for i in range(args.gpu_num - 1, -1, -1):
-                        device_ids.append(i)
-                        device = torch.device("cuda:%d" % i)
-                else:
-                    device_ids = list(range(args.gpu_num))
-                    device = torch.device("cuda:0")
-            else:
+                device_ids = list(range(args.gpu_num))
                 device = torch.device("cuda:0")
-                device_ids = None
-                logging.info('Single GPU setting')
+        else:
+            device = torch.device("cuda:0")
+            device_ids = None
+            logging.info('Single GPU setting')
     else:
         device = torch.device('cpu')
         device_ids = None
