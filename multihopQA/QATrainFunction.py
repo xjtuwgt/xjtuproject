@@ -310,7 +310,7 @@ def model_evaluation(model, dev_data_loader, args):
             predicted_span_pair = list(zip(predicted_span_start, predicted_span_end))
             answer_span_predicted += predicted_span_pair
             # ++++++++++++++++++
-            supp_doc_res = output['doc_score']
+            supp_doc_res, _ = output['doc_score']
             doc_lens = sample['doc_lens']
             doc_mask = doc_lens.masked_fill(doc_lens > 0, 1)
             supp_doc_pred_i = supp_doc_prediction(scores=supp_doc_res, mask=doc_mask, pred_num=2)
