@@ -334,7 +334,7 @@ def model_evaluation(model, dev_data_loader, args):
     logging.info('Loading tokenizer')
     tokenizer = LongformerTokenizer.from_pretrained(args.pretrained_cfg_name, do_lower_case=True)
     logging.info('Loading preprocessed data...')
-    data = read_train_dev_data_frame(file_path=args.data_path, json_fileName=args.test_data_name)
+    data = read_train_dev_data_frame(file_path=args.data_path, json_fileName=args.dev_data_name)
     data['answer_prediction'] = answer_type_predicted
     data['answer_span_prediction'] = answer_span_predicted
     data['supp_doc_prediction'] = supp_doc_predicted
