@@ -276,6 +276,7 @@ def model_evaluation(model, dev_data_loader, args):
     answer_span_predicted = []
     supp_sent_predicted = []
     supp_doc_predicted = []
+    ctx_encodes = []
     answer_type_acc = 0.0
     ###########################################################
     model.eval()
@@ -325,6 +326,9 @@ def model_evaluation(model, dev_data_loader, args):
                                                     threshold=args.sent_threshold)
             supp_sent_predicted += supp_sent_pred_i
             # +++++++++++++++++++
+            ctx_encode_i = sample['ctx_encode']
+            ctx_encodes += ctx_encode_i.detach().tolist()
+            # +++++++++++++++++++
             step = step + 1
             if step % args.test_log_steps == 0:
                 logging.info('Evaluating the model... {}/{} in {:.4f} seconds'.format(step, total_steps, time()-start_time))
@@ -334,11 +338,11 @@ def model_evaluation(model, dev_data_loader, args):
     logging.info('Loading tokenizer')
     tokenizer = LongformerTokenizer.from_pretrained(args.pretrained_cfg_name, do_lower_case=True)
     logging.info('Loading preprocessed data...')
-    data = read_train_dev_data_frame(file_path=args.data_path, json_fileName=args.dev_data_name)
-    data['answer_prediction'] = answer_type_predicted
-    data['answer_span_prediction'] = answer_span_predicted
-    data['supp_doc_prediction'] = supp_doc_predicted
-    data['supp_sent_prediction'] = supp_sent_predicted
+    data = pd.DataFrame({'answer_prediction': answer_type_predicted,
+                         'answer_span_prediction': answer_span_predicted,
+                         'supp_doc_prediction': supp_doc_predicted,
+                         'supp_sent_prediction': supp_sent_predicted,
+                         'ctx_encode': ctx_encodes})
     def row_process(row):
         answer_prediction = row['answer_prediction']
         answer_span_predicted = row['answer_span_prediction']
