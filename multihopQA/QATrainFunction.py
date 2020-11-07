@@ -374,7 +374,7 @@ def model_evaluation(model, dev_data_loader, args):
 
         ctx_contents = row['context']
         supp_doc_prediction = row['supp_doc_prediction']
-        supp_doc_titles = [ctx_contents[idx][0] for idx in supp_doc_prediction]
+        supp_doc_titles = [ctx_contents[idx][0].lower() for idx in supp_doc_prediction]
         #####
         support_fact_title_set = set([_[0].lower() for _ in row['supporting_facts']])
         exact_match_doc = 0
