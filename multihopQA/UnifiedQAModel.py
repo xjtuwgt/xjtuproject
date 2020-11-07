@@ -123,7 +123,7 @@ class LongformerHotPotQAModel(nn.Module):
         doc_start_positions, doc_end_positions = sample['doc_start'], sample['doc_end']
         sent_start_positions, sent_end_positions = sample['sent_start'], sample['sent_end']
         # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        if self.hop_model_name is not None:
+        if (self.hop_model_name is not None) and self.training:
             head_doc_positions, tail_doc_positions = sample['head_idx'], sample['tail_idx']
             head_tail_pair = (head_doc_positions, tail_doc_positions)
         else:
