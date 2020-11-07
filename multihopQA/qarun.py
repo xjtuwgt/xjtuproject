@@ -30,7 +30,7 @@ def parse_args(args=None):
     parser.add_argument('--data_path', type=str, default='../data/hotpotqa/distractor_qa')
     ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     parser.add_argument('--orig_data_path', type=str, default='../data/hotpotqa')
-    parser.add_argument('--orig_dev_data_name', type=str, default='hotpot_dev_distractor_v1.json')
+    parser.add_argument('--orig_dev_data_name', type=str, default='hotpot_test_distractor_v1.json')
     ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     parser.add_argument('--train_data_name', type=str, default='hotpot_train_distractor_wiki_tokenized.json')
     parser.add_argument('--train_data_filtered', type=int, default=0)
