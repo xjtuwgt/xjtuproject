@@ -338,11 +338,12 @@ def model_evaluation(model, dev_data_loader, args):
     logging.info('Loading tokenizer')
     tokenizer = LongformerTokenizer.from_pretrained(args.pretrained_cfg_name, do_lower_case=True)
     logging.info('Loading preprocessed data...')
-    data = pd.DataFrame({'answer_prediction': answer_type_predicted,
-                         'answer_span_prediction': answer_span_predicted,
-                         'supp_doc_prediction': supp_doc_predicted,
-                         'supp_sent_prediction': supp_sent_predicted,
-                         'ctx_encode': ctx_encodes})
+    data = read_train_dev_data_frame(file_path=args.data_path, json_fileName=args.dev_data_name)
+    data['answer_prediction'] = answer_type_predicted
+    data['answer_span_prediction'] = answer_span_predicted
+    data['supp_doc_prediction'] = supp_doc_predicted
+    data['supp_sent_prediction'] = supp_sent_predicted
+    data['ctx_encode'] = ctx_encodes
     def row_process(row):
         answer_prediction = row['answer_prediction']
         answer_span_predicted = row['answer_span_prediction']
