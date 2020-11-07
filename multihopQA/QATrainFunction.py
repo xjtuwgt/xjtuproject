@@ -281,7 +281,6 @@ def model_evaluation(model, dev_data_loader, args):
     supp_sent_predicted = []
     supp_doc_predicted = []
     ctx_encodes = []
-    answer_type_acc = 0.0
     ###########################################################
     model.eval()
     ###########################################################
@@ -300,11 +299,6 @@ def model_evaluation(model, dev_data_loader, args):
             if len(answer_type_res.shape) > 1:
                 answer_type_res = answer_type_res.squeeze(dim=-1)
             answer_types = torch.argmax(answer_type_res, dim=-1)
-            answer_type_true = sample['yes_no']
-            if len(answer_type_true.shape) > 1:
-                answer_type_true = answer_type_true.squeeze(dim=-1)
-            correct_answer_type = (answer_types == answer_type_true).sum().data.item()
-            answer_type_acc += correct_answer_type
             answer_type_predicted += answer_types.detach().tolist()
             # +++++++++++++++++++
             start_logits, end_logits = output['span_score']
@@ -339,7 +333,6 @@ def model_evaluation(model, dev_data_loader, args):
                 logging.info('Evaluating the model... {}/{} in {:.4f} seconds'.format(step, total_steps, time()-start_time))
     logging.info('Evaluation is completed over {} examples in {:.4f} seconds'.format(N, time() - start_time))
     # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    answer_type_acc = '{:.4f}'.format(answer_type_acc * 1.0/N)
     logging.info('Loading tokenizer')
     tokenizer = LongformerTokenizer.from_pretrained(args.pretrained_cfg_name, do_lower_case=True)
     logging.info('Loading preprocessed data...')
@@ -355,6 +348,25 @@ def model_evaluation(model, dev_data_loader, args):
         answer_span_predicted = row['answer_span_prediction']
         span_start, span_end = answer_span_predicted
         encode_ids = row['ctx_encode']
+        answer = row['answer']
+        if answer.strip().lower() in ['yes', 'no', 'noanswer']:
+            if answer.strip().lower()== 'yes':
+                if answer_prediction == 1:
+                    answer_correct = 1
+                else:
+                    answer_correct = 0
+            else:
+                if answer_prediction == 2:
+                    answer_correct = 1
+                else:
+                    answer_correct = 0
+        else:
+            if answer_prediction == 0:
+                answer_correct = 1
+            else:
+                answer_correct = 0
+
+
         if answer_prediction > 0:
             predicted_answer = 'yes' if answer_prediction == 1 else 'no'
         else:
@@ -372,13 +384,14 @@ def model_evaluation(model, dev_data_loader, args):
         #####
         supp_sent_prediction = row['supp_sent_prediction']
         supp_sent_pairs = [(ctx_contents[pair_idx[0]][0], pair_idx[1]) for pair_idx in supp_sent_prediction]
-        return predicted_answer, supp_doc_titles, supp_sent_pairs, exact_match_doc
+        return predicted_answer, supp_doc_titles, supp_sent_pairs, exact_match_doc, answer_correct
 
-    pred_names = ['answer', 'sp_doc', 'sp', 'em_doc']
+    pred_names = ['answer', 'sp_doc', 'sp', 'em_doc', 'ans_type']
     data[pred_names] = data.swifter.progress_bar(True).apply(lambda row: pd.Series(row_process(row)), axis=1)
     res_names = ['_id', 'answer', 'sp_doc', 'sp']
     ###+++++++++++++++++++
     em_doc_ratio = data['em_doc'].mean()
+    answer_type_acc = '{:.4f}'.format(data['ans_type'].mean())
     ###++++++++++++++++++++
     predicted_data = data[res_names]
     id_list = predicted_data['_id'].tolist()
