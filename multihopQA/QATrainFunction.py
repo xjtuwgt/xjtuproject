@@ -326,6 +326,7 @@ def model_evaluation(model, dev_data_loader, args):
                                                     threshold=args.sent_threshold)
             supp_sent_predicted += supp_sent_pred_i
             # +++++++++++++++++++
+            # +++++++++++++++++++
             ctx_encode_i = sample['ctx_encode']
             ctx_encodes += ctx_encode_i.detach().tolist()
             # +++++++++++++++++++
@@ -338,6 +339,7 @@ def model_evaluation(model, dev_data_loader, args):
     logging.info('Loading tokenizer')
     tokenizer = LongformerTokenizer.from_pretrained(args.pretrained_cfg_name, do_lower_case=True)
     logging.info('Loading preprocessed data...')
+
     data = read_train_dev_data_frame(file_path=args.data_path, json_fileName=args.dev_data_name)
     data['answer_prediction'] = answer_type_predicted
     data['answer_span_prediction'] = answer_span_predicted
@@ -353,6 +355,7 @@ def model_evaluation(model, dev_data_loader, args):
             predicted_answer = 'yes' if answer_prediction == 1 else 'no'
         else:
             predicted_answer = tokenizer.decode(encode_ids[span_start:(span_end + 1)], skip_special_tokens=True)
+
         ctx_contents = row['context']
         supp_doc_prediction = row['supp_doc_prediction']
         supp_doc_titles = [ctx_contents[idx][0] for idx in supp_doc_prediction]
@@ -364,11 +367,13 @@ def model_evaluation(model, dev_data_loader, args):
     data[pred_names] = data.swifter.progress_bar(True).apply(lambda row: pd.Series(row_process(row)), axis=1)
     res_names = ['_id', 'answer', 'sp_doc', 'sp']
     ###++++++++++++++++++++
-    predicted_data_json = data[res_names].to_json()
-    golden_data_json = read_train_dev_data_frame(file_path=args.orig_data_path, json_fileName=args.orig_dev_data_name)
-    metrics = json_eval(prediction=predicted_data_json, gold=golden_data_json)
+    predicted_data = data[res_names]
+    predicted_data_dict = predicted_data.to_dict(orient='records')
+    golden_data = read_train_dev_data_frame(file_path=args.orig_data_path, json_fileName=args.orig_dev_data_name)
+    golden_data_dict = golden_data.to_dict(orient='records')
+    metrics = json_eval(prediction=predicted_data_dict, gold=golden_data_dict)
     ###++++++++++++++++++++
-    res = {'metrics': metrics, 'answer_type_acc': answer_type_acc, 'res_dataframe': data}
+    res = {'metrics': metrics, 'answer_type_acc': answer_type_acc, 'res_dataframe': predicted_data}
     return res
 
 def supp_doc_prediction(scores: T, mask: T, pred_num=2):

@@ -257,9 +257,12 @@ def hotpot_prediction(model, test_data_loader, args):
         supp_sent_pairs = [(ctx_contents[pair_idx[0]][0], pair_idx[1])for pair_idx in supp_sent_prediction]
         return predicted_answer, supp_doc_titles, supp_sent_pairs
 
-    res_names = ['answer', 'sp_doc', 'sp']
-    data[res_names] = data.apply(lambda row: pd.Series(row_process(row)), axis=1)
-    return data
+    pred_names = ['answer', 'sp_doc', 'sp']
+    data[pred_names] = data.apply(lambda row: pd.Series(row_process(row)), axis=1)
+    res_names = ['_id', 'answer', 'sp_doc', 'sp']
+    ###++++++++++++++++++++
+    predicted_data = data[res_names]
+    return predicted_data
 
 def supp_doc_prediction(scores: T, mask: T, pred_num=2):
     batch_size, sample_size = scores.shape[0], scores.shape[1]
