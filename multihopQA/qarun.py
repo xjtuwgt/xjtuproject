@@ -12,7 +12,7 @@ import torch
 from torch.nn import DataParallel
 from multihopr.gpu_utils import gpu_setting, set_seeds
 from multihopQA.QATrainFunction import get_train_data_loader, get_dev_data_loader, get_model, get_date_time, get_check_point
-from multihopQA.QATrainFunction import train_all_steps, test_all_steps, log_metrics
+from multihopQA.QATrainFunction import train_all_steps, model_evaluation, log_metrics
 from multihopQA.longformerQAUtils import PRE_TAINED_LONFORMER_BASE
 
 
@@ -28,6 +28,10 @@ def parse_args(args=None):
     parser.add_argument('--do_retrieval', action='store_true')
     parser.add_argument('--evaluate_train', action='store_true', help='Evaluate on training data')
     parser.add_argument('--data_path', type=str, default='../data/hotpotqa/distractor_qa')
+    ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    parser.add_argument('--orig_data_path', type=str, default='../data/hotpotqa')
+    parser.add_argument('--orig_dev_data_name', type=str, default='hotpot_dev_distractor_v1.json')
+    ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     parser.add_argument('--train_data_name', type=str, default='hotpot_train_distractor_wiki_tokenized.json')
     parser.add_argument('--train_data_filtered', type=int, default=0)
     parser.add_argument('--dev_data_name', type=str, default='hotpot_dev_distractor_wiki_tokenized.json')
@@ -122,18 +126,40 @@ def main(args):
     # Write logs to checkpoint and console
     set_logger(args)
     if args.cuda:
-        if args.gpu_num > 1:
-            logging.info("Using GPU!")
-            available_device_count = torch.cuda.device_count()
-            if args.gpu_num > available_device_count:
-                args.gpu_num = available_device_count
-            # ++++++++++++++++++++++++++++++++++
-            device_ids = list(range(args.gpu_num))
-            device = torch.device("cuda:0")
+        if args.do_debug:
+            if args.gpu_num > 1:
+                device_ids, used_memory = gpu_setting(args.gpu_num)
+            else:
+                device_ids, used_memory = gpu_setting()
+            if used_memory > 100:
+                logging.info('Using memory = {}'.format(used_memory))
+            if device_ids is not None:
+                device = torch.device('cuda:{}'.format(device_ids[0]))
+            else:
+                device = torch.device('cuda:0')
+            logging.info('Set the cuda with idxes = {}'.format(device_ids))
+            logging.info('cuda setting {}'.format(device))
         else:
-            device = torch.device("cuda:0")
-            device_ids = None
-            logging.info('Single GPU setting')
+            if args.gpu_num > 1:
+                logging.info("Using GPU!")
+                available_device_count = torch.cuda.device_count()
+                # ++++++++++++++++++++++++++++++++++
+                gpu_setting(available_device_count)
+                # ++++++++++++++++++++++++++++++++++
+                logging.info('GPU number is {}'.format(available_device_count))
+                if args.gpu_num > available_device_count:
+                    args.gpu_num = available_device_count
+                    device_ids = []
+                    for i in range(args.gpu_num - 1, -1, -1):
+                        device_ids.append(i)
+                        device = torch.device("cuda:%d" % i)
+                else:
+                    device_ids = list(range(args.gpu_num))
+                    device = torch.device("cuda:0")
+            else:
+                device = torch.device("cuda:0")
+                device_ids = None
+                logging.info('Single GPU setting')
     else:
         device = torch.device('cpu')
         device_ids = None
@@ -178,22 +204,20 @@ def main(args):
         logging.info('projection_dim = {}'.format(args.project_dim))
         logging.info('learning_rate = {}'.format(args.learning_rate))
         logging.info('Start training...')
-        train_all_steps(model=model, optimizer=optimizer, dev_dataloader=dev_data_loader, train_dataloader=train_data_loader, args=args)
+        # train_all_steps(model=model, optimizer=optimizer, dev_dataloader=dev_data_loader, train_dataloader=train_data_loader, args=args)
         logging.info('Completed training in {:.4f} seconds'.format(time() - start_time))
         logging.info('Evaluating on Valid Dataset...')
-        metric_dict = test_all_steps(model=model, test_data_loader=dev_data_loader, args=args)
+        metric_dict = model_evaluation(model=model, dev_data_loader=dev_data_loader, args=args)
         answer_type_acc = metric_dict['answer_type_acc']
-        for key, metrics in metric_dict.items():
-            if key.endswith('metrics'):
-                logging.info('Metrics = {}'.format(key))
-                logging.info('*' * 75)
-                log_metrics('Valid', 'All step', metrics)
-                logging.info('*' * 75)
+        logging.info('*' * 75)
+        log_metrics('Valid', 'final', metric_dict['metrics'])
         logging.info('Answer type prediction accuracy: {}'.format(answer_type_acc))
         logging.info('*' * 75)
         ##++++++++++++++++++++++++++++++++++++++++++++++++++++
         dev_data_frame = metric_dict['res_dataframe']
-        dev_result_name = os.path.join(args.save_path, 'all_step_acc_' + answer_type_acc + '.json')
+        date_time_str = get_date_time()
+        dev_result_name = os.path.join(args.save_path,
+                                       date_time_str + '_final_acc_' + answer_type_acc + '.json')
         dev_data_frame.to_json(dev_result_name, orient='records')
         logging.info('Saving {} record results to {}'.format(dev_data_frame.shape, dev_result_name))
         logging.info('*' * 75)

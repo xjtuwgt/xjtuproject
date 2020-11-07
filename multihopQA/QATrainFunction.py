@@ -10,18 +10,18 @@ import os
 import pandas as pd
 from time import time
 import torch
+import swifter
 from torch import Tensor as T
+from multihopQA.hotpot_evaluate_v1 import json_eval
 from torch.utils.data import DataLoader
 from transformers import LongformerTokenizer
 from multihopQA.hotpotQAdataloader import HotpotDataset, HotpotDevDataset
 from multihopQA.longformerQAUtils import LongformerQATensorizer, LongformerEncoder
 from multihopQA.UnifiedQAModel import LongformerHotPotQAModel
-from pandas import DataFrame
 from datetime import date, datetime
 
 def read_train_dev_data_frame(file_path, json_fileName):
     start_time = time()
-    # print(os.path.join(file_path, json_fileName))
     data_frame = pd.read_json(os.path.join(file_path, json_fileName), orient='records')
     logging.info('Loading {} in {:.4f} seconds'.format(data_frame.shape, time() - start_time))
     return data_frame
@@ -154,15 +154,9 @@ def training_warm_up(model, optimizer, train_dataloader, dev_dataloader, args):
             logging.info('*' * 75)
             break
     logging.info('Evaluating on Valid Dataset...')
-    metric_dict = test_all_steps(model=model, test_data_loader=dev_dataloader, args=args)
-    answer_type_acc = metric_dict['answer_type_acc']
-    for key, metrics in metric_dict.items():
-        if key.endswith('metrics'):
-            logging.info('Metrics = {}'.format(key))
-            logging.info('*' * 75)
-            log_metrics('Valid', step, metrics)
-            logging.info('*' * 75)
-    logging.info('Answer type prediction accuracy: {}'.format(answer_type_acc))
+    metric_dict = model_evaluation(model=model, dev_data_loader=dev_dataloader, args=args)
+    log_metrics('Valid', 'warm up', metric_dict['metrics'])
+    logging.info('Answer type prediction accuracy: {}'.format(metric_dict['answer_type_acc']))
     logging.info('*' * 75)
 
 def train_all_steps(model, optimizer, train_dataloader, dev_dataloader, args):
@@ -207,31 +201,28 @@ def train_all_steps(model, optimizer, train_dataloader, dev_dataloader, args):
             if args.do_valid and step % args.valid_steps == 0:
                 logging.info('*' * 75)
                 logging.info('Evaluating on Valid Dataset...')
-                metric_dict = test_all_steps(model=model, test_data_loader=dev_dataloader, args=args)
+                metric_dict = model_evaluation(model=model, dev_data_loader=dev_dataloader, args=args)
                 answer_type_acc = metric_dict['answer_type_acc']
                 eval_metric = answer_type_acc
-                sent_pred_f1 = metric_dict['supp_sent_metrics']['sp_f1']
-                if max_sent_pred_f1 < sent_pred_f1:
-                    max_sent_pred_f1 = sent_pred_f1
-                    save_path = save_check_point(model=model, optimizer=optimizer, step=step, loss=train_loss,
-                                                 eval_metric=max_sent_pred_f1, args=args)
-                    logging.info('Saving the mode in {} with current best metric = {:.4f}'.format(save_path, max_sent_pred_f1))
-                for key, metrics in metric_dict.items():
-                    if key.endswith('metrics'):
-                        logging.info('Metrics = {}'.format(key))
-                        logging.info('*' * 75)
-                        log_metrics('Valid', step, metrics)
-                        logging.info('*' * 75)
+                sent_pred_f1 = metric_dict['metrics']['sp_f1']
+                logging.info('*' * 75)
+                log_metrics('Valid', step, metric_dict['metrics'])
                 logging.info('Answer type prediction accuracy: {}'.format(answer_type_acc))
                 logging.info('*' * 75)
                 ##++++++++++++++++++++++++++++++++++++++++++++++++++++
                 dev_data_frame = metric_dict['res_dataframe']
                 date_time_str = get_date_time()
-                dev_result_name = os.path.join(args.save_path, date_time_str + '_' + str(step) + "_acc_" + answer_type_acc + '.json')
+                dev_result_name = os.path.join(args.save_path,
+                                               date_time_str + '_' + str(step) + "_acc_" + answer_type_acc + '.json')
                 dev_data_frame.to_json(dev_result_name, orient='records')
                 logging.info('Saving {} record results to {}'.format(dev_data_frame.shape, dev_result_name))
                 logging.info('*' * 75)
                 ##++++++++++++++++++++++++++++++++++++++++++++++++++++
+                if max_sent_pred_f1 < sent_pred_f1:
+                    max_sent_pred_f1 = sent_pred_f1
+                    save_path = save_check_point(model=model, optimizer=optimizer, step=step, loss=train_loss,
+                                                 eval_metric=max_sent_pred_f1, args=args)
+                    logging.info('Saving the mode in {} with current best metric = {:.4f}'.format(save_path, max_sent_pred_f1))
     logging.info('Training completed...')
 
 def train_single_step(model, optimizer, train_sample, args):
@@ -272,227 +263,142 @@ def train_single_step(model, optimizer, train_sample, args):
     return log
 
 ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-##++++++++++++++++++++++++++++++++++++++++++++++++Test steps++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-def test_all_steps(model, test_data_loader, args):
+def model_evaluation(model, dev_data_loader, args):
     '''
             Evaluate the model on test or valid datasets
     '''
-    model.eval()
-    ###########################################################
     start_time = time()
-    test_dataset = test_data_loader
-    doc_logs, sent_logs = [], []
     step = 0
     N = 0
-    total_steps = len(test_dataset)
+    total_steps = len(dev_data_loader)
     # **********************************************************
-    support_doc_pred_results, support_doc_true_results, support_doc_score_results = [], [], []
-    support_sent_pred_results, support_sent_true_results, support_sent_score_results, support_sent_doc_sent_pair_results = [], [], [], []
-    answer_type_pred_results, answer_type_true_results = [], []
-    span_pred_start_results, span_true_start_results = [], []
-    span_pred_end_results, span_true_end_results = [], []
-    encode_id_results = []
-    correct_answer_num = 0
-    # **********************************************************
+    answer_type_predicted = []
+    answer_span_predicted = []
+    supp_sent_predicted = []
+    supp_doc_predicted = []
+    answer_type_acc = 0.0
+    ###########################################################
+    model.eval()
+    ###########################################################
     with torch.no_grad():
-        for test_sample in test_dataset:
+        for dev_sample in dev_data_loader:
             if args.cuda:
                 sample = dict()
-                for key, value in test_sample.items():
+                for key, value in dev_sample.items():
                     sample[key] = value.cuda()
             else:
-                sample = test_sample
+                sample = dev_sample
             output = model(sample)
-            N = N + sample['doc_labels'].shape[0]
-            eval_res = metric_computation(output_scores=output, sample=sample, args=args)
+            N = N + sample['ctx_encode'].shape[0]
+            # ++++++++++++++++++
+            answer_type_res = output['yn_score']
+            if len(answer_type_res.shape) > 1:
+                answer_type_res = answer_type_res.squeeze(dim=-1)
+            answer_types = torch.argmax(answer_type_res, dim=-1)
+            answer_type_true = sample['yes_no']
+            if len(answer_type_true.shape) > 1:
+                answer_type_true = answer_type_true.squeeze(dim=-1)
+            correct_answer_type = (answer_types == answer_type_true).sum().data.item()
+            answer_type_acc += correct_answer_type
+            answer_type_predicted += answer_types.detach().tolist()
             # +++++++++++++++++++
-            correct_yn, yn_predicted_labels, yn_true_labels = eval_res['answer_type']
-            correct_answer_num += correct_yn
-            answer_type_pred_results += yn_predicted_labels
-            answer_type_true_results += yn_true_labels
+            start_logits, end_logits = output['span_score']
+            predicted_span_start = torch.argmax(start_logits, dim=-1)
+            predicted_span_end = torch.argmax(end_logits, dim=-1)
+            predicted_span_start = predicted_span_start.detach().tolist()
+            predicted_span_end = predicted_span_end.detach().tolist()
+            predicted_span_pair = list(zip(predicted_span_start, predicted_span_end))
+            answer_span_predicted += predicted_span_pair
+            # ++++++++++++++++++
+            supp_doc_res = output['doc_score']
+            doc_lens = sample['doc_lens']
+            doc_mask = doc_lens.masked_fill(doc_lens > 0, 1)
+            supp_doc_pred_i = supp_doc_prediction(scores=supp_doc_res, mask=doc_mask, pred_num=2)
+            supp_doc_predicted += supp_doc_pred_i
+            # ++++++++++++++++++
+            supp_sent_res = output['sent_score']
+            sent_lens = sample['sent_lens']
+            sent_mask = sent_lens.masked_fill(sent_lens > 0, 1)
+            sent_fact_doc_idx, sent_fact_sent_idx = sample['fact_doc'], sample['fact_sent']
+            supp_sent_pred_i = supp_sent_prediction(scores=supp_sent_res, mask=sent_mask, doc_fact=sent_fact_doc_idx,
+                                                    sent_fact=sent_fact_sent_idx, pred_num=2,
+                                                    threshold=args.sent_threshold)
+            supp_sent_predicted += supp_sent_pred_i
             # +++++++++++++++++++
-            span_start, span_end = eval_res['answer_span']
-            span_predicted_start, span_true_start = span_start
-            span_predicted_end, span_true_end = span_end
-            span_pred_start_results += span_predicted_start
-            span_pred_end_results += span_predicted_end
-            span_true_start_results += span_true_start
-            span_true_end_results += span_true_end
-            # +++++++++++++++++++
-            encode_ids = eval_res['encode_ids']
-            encode_id_results += encode_ids
-            # +++++++++++++++++++
-            doc_metric_logs, doc_pred_res = eval_res['supp_doc']
-            doc_logs += doc_metric_logs
-            doc_predicted_labels, doc_true_labels, doc_score_list = doc_pred_res
-            support_doc_pred_results += doc_predicted_labels
-            support_doc_true_results += doc_true_labels
-            support_doc_score_results += doc_score_list
-            # +++++++++++++++++++
-            sent_metric_logs, sent_pred_res = eval_res['supp_sent']
-            sent_logs += sent_metric_logs
-            sent_predicted_labels, sent_true_labels, sent_score_list, doc_sent_fact_pair = sent_pred_res
-            support_sent_pred_results += sent_predicted_labels
-            support_sent_true_results += sent_true_labels
-            support_sent_score_results += sent_score_list
-            support_sent_doc_sent_pair_results += doc_sent_fact_pair
-            ##-------------------------------------------------------------------
-            # ******************************************
-            step += 1
+            step = step + 1
             if step % args.test_log_steps == 0:
                 logging.info('Evaluating the model... {}/{} in {:.4f} seconds'.format(step, total_steps, time()-start_time))
-    doc_metrics, sent_metrics = {}, {}
-    for metric in doc_logs[0].keys():
-        doc_metrics[metric] = sum([log[metric] for log in doc_logs]) / len(doc_logs)
-    for metric in sent_logs[0].keys():
-        sent_metrics[metric] = sum([log[metric] for log in sent_logs]) / len(sent_logs)
-    ##=================================================
-    answer_type_accuracy = '{:.4f}'.format(correct_answer_num * 1.0/N)
-    result_dict = {'aty_pred': answer_type_pred_results, 'aty_true': answer_type_true_results,
-                   'sd_pred': support_doc_pred_results, 'sd_true': support_doc_true_results,
-                   'ss_pred': support_sent_pred_results, 'ss_true': support_sent_true_results,
-                   'sps_pred': span_pred_start_results, 'spe_pred': span_pred_end_results,
-                   'sps_true': span_true_start_results, 'spe_true': span_true_end_results,
-                   'sd_score': support_doc_score_results, 'ss_score': support_sent_score_results,
-                   'ss_ds_pair': support_sent_doc_sent_pair_results,
-                   'encode_ids': encode_id_results} ## for detailed results checking
-    res_data_frame = DataFrame(result_dict)
-    ##=================================================
-    return {'supp_doc_metrics': doc_metrics, 'supp_sent_metrics': sent_metrics,
-            'answer_type_acc': answer_type_accuracy, 'res_dataframe': res_data_frame}
-
-
-def metric_computation(output_scores: dict, sample: dict, args):
-    # =========Answer type prediction==========================
-    yn_scores = output_scores['yn_score']
-    yn_true_labels = sample['yes_no']
-    if len(yn_true_labels.shape) > 1:
-        yn_true_labels = yn_true_labels.squeeze(dim=-1)
-    yn_predicted_labels = torch.argmax(yn_scores, dim=-1)
-    correct_yn = (yn_predicted_labels == yn_true_labels).sum().data.item()
-    yn_predicted_labels = yn_predicted_labels.detach().tolist()
-    yn_true_labels = yn_true_labels.detach().tolist()
-    # =========Answer span prediction==========================
-    start_logits, end_logits = output_scores['span_score']
-    predicted_span_start = torch.argmax(start_logits, dim=-1)
-    predicted_span_end = torch.argmax(end_logits, dim=-1)
-    predicted_span_start = predicted_span_start.detach().tolist()
-    predicted_span_end = predicted_span_end.detach().tolist()
-    ## +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    answer_start_positions, answer_end_positions = sample['ans_start'], sample['ans_end']
-    if len(answer_start_positions.shape) > 1:
-        answer_start_positions = answer_start_positions.squeeze(dim=-1)
-    if len(answer_end_positions.shape) > 1:
-        answer_end_positions = answer_end_positions.squeeze(dim=-1)
-    ## +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    true_span_start = answer_start_positions.detach().tolist()
-    true_span_end = answer_end_positions.detach().tolist()
-    # =========Answer span prediction==========================
-    # +++++++++ supp doc prediction +++++++++++++++++++++++++++
-    doc_label, doc_lens = sample['doc_labels'], sample['doc_lens']
-    doc_mask = doc_lens.masked_fill(doc_lens > 0, 1)
-    supp_doc_scores, _ = output_scores['doc_score']
-    doc_metric_logs, doc_pred_res = support_doc_infor_evaluation(scores=supp_doc_scores, labels=doc_label, mask=doc_mask, pred_num=2)
-    # +++++++++ supp doc prediction +++++++++++++++++++++++++++
-    # +++++++++ supp sent prediction +++++++++++++++++++++++++++
-    supp_sent_scores = output_scores['sent_score']
-    sent_label, sent_lens = sample['sent_labels'], sample['sent_lens']
-    sent_mask = sent_lens.masked_fill(sent_lens > 0, 1)
-    sent_fact_doc_idx, sent_fact_sent_idx = sample['fact_doc'], sample['fact_sent']
-    sent_metric_logs, sent_pred_res = support_sent_infor_evaluation(scores=supp_sent_scores, labels=sent_label, mask=sent_mask, pred_num=2,
-                                                               threshold=args.sent_threshold, doc_fact=sent_fact_doc_idx, sent_fact=sent_fact_sent_idx)
-    # +++++++++ supp sent prediction +++++++++++++++++++++++++++
-    # +++++++++ encode ids +++++++++++++++++++++++++++++++++++++
-    encode_ids = sample['ctx_encode'].detach().tolist()
-    # +++++++++ encode ids +++++++++++++++++++++++++++++++++++++
-    return {'answer_type': (correct_yn, yn_predicted_labels, yn_true_labels),
-            'answer_span': ((predicted_span_start, true_span_start), (predicted_span_end, true_span_end)),
-            'supp_doc': (doc_metric_logs, doc_pred_res),
-            'supp_sent': (sent_metric_logs, sent_pred_res),
-            'encode_ids': encode_ids}
-
-def sp_score(prediction, gold):
-    cur_sp_pred = set(prediction)
-    gold_sp_pred = set(gold)
-    tp, fp, fn = 0, 0, 0
-    for e in cur_sp_pred:
-        if e in gold_sp_pred:
-            tp += 1
+    logging.info('Evaluation is completed over {} examples in {:.4f} seconds'.format(N, time() - start_time))
+    # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    answer_type_acc = '{:.4f}'.format(answer_type_acc * 1.0/N)
+    logging.info('Loading tokenizer')
+    tokenizer = LongformerTokenizer.from_pretrained(args.pretrained_cfg_name, do_lower_case=True)
+    logging.info('Loading preprocessed data...')
+    data = read_train_dev_data_frame(file_path=args.data_path, json_fileName=args.test_data_name)
+    data['answer_prediction'] = answer_type_predicted
+    data['answer_span_prediction'] = answer_span_predicted
+    data['supp_doc_prediction'] = supp_doc_predicted
+    data['supp_sent_prediction'] = supp_sent_predicted
+    def row_process(row):
+        answer_prediction = row['answer_prediction']
+        answer_span_predicted = row['answer_span_prediction']
+        span_start, span_end = answer_span_predicted
+        encode_ids = row['ctx_encode']
+        if answer_prediction > 0:
+            predicted_answer = 'yes' if answer_prediction == 1 else 'no'
         else:
-            fp += 1
-    for e in gold_sp_pred:
-        if e not in cur_sp_pred:
-            fn += 1
-    prec = 1.0 * tp / (tp + fp) if tp + fp > 0 else 0.0
-    recall = 1.0 * tp / (tp + fn) if tp + fn > 0 else 0.0
-    f1 = 2 * prec * recall / (prec + recall) if prec + recall > 0 else 0.0
-    em = 1.0 if fp + fn == 0 else 0.0
-    return em, prec, recall, f1
+            predicted_answer = tokenizer.decode(encode_ids[span_start:(span_end + 1)], skip_special_tokens=True)
 
-def support_doc_infor_evaluation(scores: T, labels: T, mask: T, pred_num=2):
+        ctx_contents = row['context']
+        supp_doc_prediction = row['supp_doc_prediction']
+        supp_doc_titles = [ctx_contents[idx][0] for idx in supp_doc_prediction]
+        supp_sent_prediction = row['supp_sent_prediction']
+        supp_sent_pairs = [(ctx_contents[pair_idx[0]][0], pair_idx[1]) for pair_idx in supp_sent_prediction]
+        return predicted_answer, supp_doc_titles, supp_sent_pairs
+
+    pred_names = ['answer', 'sp_doc', 'sp']
+    data[pred_names] = data.swifter.progress_bar(True).apply(lambda row: pd.Series(row_process(row)), axis=1)
+    res_names = ['_id', 'answer', 'sp_doc', 'sp']
+    ###++++++++++++++++++++
+    predicted_data_json = data[res_names].to_json()
+    golden_data_json = read_train_dev_data_frame(file_path=args.orig_data_path, json_fileName=args.orig_dev_data_name)
+    metrics = json_eval(prediction=predicted_data_json, gold=golden_data_json)
+    ###++++++++++++++++++++
+    res = {'metrics': metrics, 'answer_type_acc': answer_type_acc, 'res_dataframe': data}
+    return res
+
+def supp_doc_prediction(scores: T, mask: T, pred_num=2):
     batch_size, sample_size = scores.shape[0], scores.shape[1]
     scores = torch.sigmoid(scores)
     masked_scores = scores.masked_fill(mask == 0, -1)
     argsort = torch.argsort(masked_scores, dim=1, descending=True)
-    logs = []
-    predicted_labels = []
-    true_labels = []
-    score_list = []
+    supp_facts_predicted = []
     for idx in range(batch_size):
-        score_list.append(masked_scores[idx].detach().tolist())
         pred_idxes_i = argsort[idx].tolist()
         pred_labels_i = pred_idxes_i[:pred_num]
-        labels_i = (labels[idx] > 0).nonzero(as_tuple=False).squeeze().tolist() ## sentence labels: [0, 1, 2], support doc: [0, 1]. 1 and 2 are support sentences
-        # +++++++++++++++++
-        predicted_labels.append(pred_labels_i)
-        true_labels.append(labels_i)
-        # +++++++++++++++++
-        em_i, prec_i, recall_i, f1_i = sp_score(prediction=pred_labels_i, gold=labels_i)
-        logs.append({
-            'sp_em': em_i,
-            'sp_f1': f1_i,
-            'sp_prec': prec_i,
-            'sp_recall':recall_i
-        })
-    return logs, (predicted_labels, true_labels, score_list)
-####++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        supp_facts_predicted.append(pred_labels_i)
+    return supp_facts_predicted
 
-def support_sent_infor_evaluation(scores: T, labels: T, mask: T, doc_fact: T, sent_fact: T, pred_num=2, threshold=0.8):
+def supp_sent_prediction(scores: T, mask: T, doc_fact: T, sent_fact: T, pred_num=2, threshold=0.9):
     batch_size, sample_size = scores.shape[0], scores.shape[1]
     scores = torch.sigmoid(scores)
     masked_scores = scores.masked_fill(mask == 0, -1)
     argsort = torch.argsort(masked_scores, dim=1, descending=True)
-    logs = []
-    predicted_labels = []
-    true_labels = []
-    score_list = []
-    doc_sent_pair_list = []
+    supp_facts_predicted = []
     for idx in range(batch_size):
-        score_list.append(masked_scores[idx].detach().tolist())
-        # ==================
-        doc_fact_i = doc_fact[idx].detach().tolist()
-        sent_fact_i = sent_fact[idx].detach().tolist()
-        doc_sent_pair_i = list(zip(doc_fact_i, sent_fact_i)) ## pair of (doc_id, sent_id) --> number of pairs = number of all sentences in long sequence
-        doc_sent_pair_list.append(doc_sent_pair_i)
-        # ==================
         pred_idxes_i = argsort[idx].tolist()
         pred_labels_i = pred_idxes_i[:pred_num]
         for i in range(pred_num, sample_size):
-            if masked_scores[idx, pred_idxes_i[i]] > threshold * masked_scores[idx, pred_idxes_i[pred_num-1]]:
+            if masked_scores[idx, pred_idxes_i[i]] >= threshold * masked_scores[idx, pred_idxes_i[pred_num-1]]:
                 pred_labels_i.append(pred_idxes_i[i])
-
-        labels_i = (labels[idx] > 0).nonzero(as_tuple=False).squeeze().tolist() ## sentence labels: [0, 1, 2], support doc: [0, 1]. 1 and 2 are support sentences
-        # +++++++++++++++++
-        predicted_labels.append(pred_labels_i)
-        true_labels.append(labels_i)
-        # +++++++++++++++++
-        em_i, prec_i, recall_i, f1_i = sp_score(prediction=pred_labels_i, gold=labels_i)
-        logs.append({
-            'sp_em': em_i,
-            'sp_f1': f1_i,
-            'sp_prec': prec_i,
-            'sp_recall':recall_i
-        })
-    return logs, (predicted_labels, true_labels, score_list, doc_sent_pair_list)
-####++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        #################################################
+        doc_fact_i = doc_fact[idx].detach().tolist()
+        sent_fact_i = sent_fact[idx].detach().tolist()
+        doc_sent_pair_i = list(zip(doc_fact_i, sent_fact_i))  ## pair of (doc_id, sent_id) --> number of pairs = number of all sentences in long sequence
+        #################################################
+        doc_sent_idx_pair_i = []
+        for pred_idx in pred_labels_i:
+            doc_sent_idx_pair_i.append(doc_sent_pair_i[pred_idx])
+        supp_facts_predicted.append(doc_sent_idx_pair_i)
+    return supp_facts_predicted
+##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
