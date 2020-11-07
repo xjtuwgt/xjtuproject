@@ -353,7 +353,6 @@ def model_evaluation(model, dev_data_loader, args):
             predicted_answer = 'yes' if answer_prediction == 1 else 'no'
         else:
             predicted_answer = tokenizer.decode(encode_ids[span_start:(span_end + 1)], skip_special_tokens=True)
-
         ctx_contents = row['context']
         supp_doc_prediction = row['supp_doc_prediction']
         supp_doc_titles = [ctx_contents[idx][0] for idx in supp_doc_prediction]
