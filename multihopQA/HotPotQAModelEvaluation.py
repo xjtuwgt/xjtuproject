@@ -262,7 +262,13 @@ def hotpot_prediction(model, test_data_loader, args):
     res_names = ['_id', 'answer', 'sp_doc', 'sp']
     ###++++++++++++++++++++
     predicted_data = data[res_names]
-    return predicted_data
+    id_list = predicted_data['_id'].tolist()
+    answer_list = predicted_data['answer'].tolist()
+    sp_list = predicted_data['sp'].tolist()
+    answer_id_dict = dict(zip(id_list, answer_list))
+    sp_id_dict = dict(zip(id_list, sp_list))
+    res_dict = {'answer': answer_id_dict, 'sp': sp_id_dict}
+    return res_dict
 
 def supp_doc_prediction(scores: T, mask: T, pred_num=2):
     batch_size, sample_size = scores.shape[0], scores.shape[1]

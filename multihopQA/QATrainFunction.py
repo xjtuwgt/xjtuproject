@@ -368,10 +368,15 @@ def model_evaluation(model, dev_data_loader, args):
     res_names = ['_id', 'answer', 'sp_doc', 'sp']
     ###++++++++++++++++++++
     predicted_data = data[res_names]
-    predicted_data_dict = predicted_data.to_dict(orient='records')
+    id_list = predicted_data['_id'].tolist()
+    answer_list = predicted_data['answer'].tolist()
+    sp_list = predicted_data['sp'].tolist()
+    answer_id_dict = dict(zip(id_list, answer_list))
+    sp_id_dict = dict(zip(id_list, sp_list))
+    res_dict = {'answer': answer_id_dict, 'sp': sp_id_dict}
     golden_data = read_train_dev_data_frame(file_path=args.orig_data_path, json_fileName=args.orig_dev_data_name)
     golden_data_dict = golden_data.to_dict(orient='records')
-    metrics = json_eval(prediction=predicted_data_dict, gold=golden_data_dict)
+    metrics = json_eval(prediction=res_dict, gold=golden_data_dict)
     ###++++++++++++++++++++
     res = {'metrics': metrics, 'answer_type_acc': answer_type_acc, 'res_dataframe': predicted_data}
     return res
