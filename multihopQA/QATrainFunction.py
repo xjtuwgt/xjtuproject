@@ -155,8 +155,10 @@ def training_warm_up(model, optimizer, train_dataloader, dev_dataloader, args):
             break
     logging.info('Evaluating on Valid Dataset...')
     metric_dict = model_evaluation(model=model, dev_data_loader=dev_dataloader, args=args)
-    log_metrics('Valid', 'warm up', metric_dict['metrics'])
     logging.info('Answer type prediction accuracy: {}'.format(metric_dict['answer_type_acc']))
+    em_supp_doc = metric_dict['em_doc']
+    logging.info('Valid at step {} with em = {:.4f} for supp doc'.format(step, em_supp_doc))
+    log_metrics('Valid', 'warm up', metric_dict['metrics'])
     logging.info('*' * 75)
 
 def train_all_steps(model, optimizer, train_dataloader, dev_dataloader, args):
@@ -205,7 +207,9 @@ def train_all_steps(model, optimizer, train_dataloader, dev_dataloader, args):
                 answer_type_acc = metric_dict['answer_type_acc']
                 eval_metric = answer_type_acc
                 sent_pred_f1 = metric_dict['metrics']['sp_f1']
+                em_supp_doc = metric_dict['em_doc']
                 logging.info('*' * 75)
+                logging.info('Valid at step {} with em = {:.4f} for supp doc'.format(step, em_supp_doc))
                 log_metrics('Valid', step, metric_dict['metrics'])
                 logging.info('Answer type prediction accuracy: {}'.format(answer_type_acc))
                 logging.info('*' * 75)
@@ -359,13 +363,22 @@ def model_evaluation(model, dev_data_loader, args):
         ctx_contents = row['context']
         supp_doc_prediction = row['supp_doc_prediction']
         supp_doc_titles = [ctx_contents[idx][0] for idx in supp_doc_prediction]
+        #####
+        support_fact_title_set = set([_[0].lower() for _ in row['supporting_facts']])
+        exact_match_doc = 0
+        assert len(supp_doc_titles) == 2
+        if (supp_doc_titles[0] in support_fact_title_set) and (supp_doc_titles[1] in support_fact_title_set):
+            exact_match_doc = 1
+        #####
         supp_sent_prediction = row['supp_sent_prediction']
         supp_sent_pairs = [(ctx_contents[pair_idx[0]][0], pair_idx[1]) for pair_idx in supp_sent_prediction]
-        return predicted_answer, supp_doc_titles, supp_sent_pairs
+        return predicted_answer, supp_doc_titles, supp_sent_pairs, exact_match_doc
 
-    pred_names = ['answer', 'sp_doc', 'sp']
+    pred_names = ['answer', 'sp_doc', 'sp', 'em_doc']
     data[pred_names] = data.swifter.progress_bar(True).apply(lambda row: pd.Series(row_process(row)), axis=1)
     res_names = ['_id', 'answer', 'sp_doc', 'sp']
+    ###+++++++++++++++++++
+    em_doc_ratio = data['em_doc'].mean()
     ###++++++++++++++++++++
     predicted_data = data[res_names]
     id_list = predicted_data['_id'].tolist()
@@ -373,12 +386,12 @@ def model_evaluation(model, dev_data_loader, args):
     sp_list = predicted_data['sp'].tolist()
     answer_id_dict = dict(zip(id_list, answer_list))
     sp_id_dict = dict(zip(id_list, sp_list))
-    res_dict = {'answer': answer_id_dict, 'sp': sp_id_dict}
+    predicted_data_dict = {'answer': answer_id_dict, 'sp': sp_id_dict}
     golden_data = read_train_dev_data_frame(file_path=args.orig_data_path, json_fileName=args.orig_dev_data_name)
     golden_data_dict = golden_data.to_dict(orient='records')
-    metrics = json_eval(prediction=res_dict, gold=golden_data_dict)
+    metrics = json_eval(prediction=predicted_data_dict, gold=golden_data_dict)
     ###++++++++++++++++++++
-    res = {'metrics': metrics, 'answer_type_acc': answer_type_acc, 'res_dataframe': predicted_data}
+    res = {'metrics': metrics, 'answer_type_acc': answer_type_acc, 'res_dataframe': predicted_data, 'em_doc': em_doc_ratio}
     return res
 
 def supp_doc_prediction(scores: T, mask: T, pred_num=2):

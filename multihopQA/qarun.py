@@ -29,8 +29,8 @@ def parse_args(args=None):
     parser.add_argument('--evaluate_train', action='store_true', help='Evaluate on training data')
     parser.add_argument('--data_path', type=str, default='../data/hotpotqa/distractor_qa')
     ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    parser.add_argument('--orig_data_path', type=str, default='../data/hotpotqa')
-    parser.add_argument('--orig_dev_data_name', type=str, default='hotpot_dev_distractor_v1.json')
+    parser.add_argument('--orig_data_path', type=str, default='../data/hotpotqa/distractor_qa')
+    parser.add_argument('--orig_dev_data_name', type=str, default='hotpot_test_distractor_v1.json')
     ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     parser.add_argument('--train_data_name', type=str, default='hotpot_train_distractor_wiki_tokenized.json')
     parser.add_argument('--train_data_filtered', type=int, default=0)
@@ -209,9 +209,11 @@ def main(args):
         logging.info('Evaluating on Valid Dataset...')
         metric_dict = model_evaluation(model=model, dev_data_loader=dev_data_loader, args=args)
         answer_type_acc = metric_dict['answer_type_acc']
+        em_supp_doc = metric_dict['em_doc']
         logging.info('*' * 75)
-        log_metrics('Valid', 'final', metric_dict['metrics'])
+        logging.info('Valid at final with em = {:.4f} for supp doc'.format(em_supp_doc))
         logging.info('Answer type prediction accuracy: {}'.format(answer_type_acc))
+        log_metrics('Valid', 'final', metric_dict['metrics'])
         logging.info('*' * 75)
         ##++++++++++++++++++++++++++++++++++++++++++++++++++++
         dev_data_frame = metric_dict['res_dataframe']
