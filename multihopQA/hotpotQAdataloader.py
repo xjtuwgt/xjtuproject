@@ -314,8 +314,8 @@ def read_train_dev_data_frame(file_path, json_fileName):
 ##**********************************************************************************************************************
 
 class HotpotDevDataset(Dataset): ##for dev dataloader
-    def __init__(self, data_frame: DataFrame, hotpot_tensorizer: LongformerQATensorizer,
-                 max_doc_num=10, max_sent_num=150, global_mask_type: str = 'query_doc'):
+    def __init__(self, data_frame: DataFrame, hotpot_tensorizer: LongformerQATensorizer, max_doc_num=10, max_sent_num=150,
+                 global_mask_type: str = 'query_doc'):
         self.len = data_frame.shape[0]
         self.data = data_frame
         self.max_len = hotpot_tensorizer.max_length
@@ -330,43 +330,8 @@ class HotpotDevDataset(Dataset): ##for dev dataloader
     def __getitem__(self, idx):
         example = self.data.iloc[idx]
         query_encode, query_len = example['ques_encode'], example['ques_len']
-        pos_ctx_encode, pos_ctx_lens, neg_ctx_encode, neg_ctx_lens = example['p_ctx_encode'], example['p_ctx_lens'], \
-                                                                     example['n_ctx_encode'], example['n_ctx_lens']
-        norm_answer = example['norm_answer']
-        if norm_answer.strip() in ['yes', 'no', 'noanswer']: ## yes: 1, no/noanswer: 2, span = 0
-            yes_no_label = torch.LongTensor([1]) if norm_answer.strip() == 'yes' else torch.LongTensor([2])
-        else:
-            yes_no_label = torch.LongTensor([0])
-        ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        yes_no_question = example['yes_no']
-        not_found_answer = example['no_found']
-        if not_found_answer:
-            yes_no_question = True
-        ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        ctx_enocde = pos_ctx_encode + neg_ctx_encode
-        ctx_lens = pos_ctx_lens + neg_ctx_lens
-        doc_labels = [1] * len(pos_ctx_encode) + [0] * len(neg_ctx_encode)
-        doc_num = len(doc_labels)
-        pos_position = [_[4] for _ in example['p_ctx']]
-        neg_position = [_[4] for _ in example['n_ctx']]
-        pos_weights = [_[2] for _ in example['p_ctx']]
-        neg_weights = [_[2] for _ in example['n_ctx']]
-        ctx_weights = pos_weights + neg_weights
-        ctx_orig_position = pos_position + neg_position
-        ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        orig_orders = [i for (v, i) in sorted((v, i) for (i, v) in enumerate(ctx_orig_position))]
-        ctx_enocde = [ctx_enocde[orig_orders[i]] for i in range(doc_num)]
-        ctx_lens = [ctx_lens[orig_orders[i]] for i in range(doc_num)]
-        doc_labels = [doc_labels[orig_orders[i]] for i in range(doc_num)]
-        ctx_weights = [ctx_weights[orig_orders[i]] for i in range(doc_num)]
-        ####################################################
-        ctx_label_weight = [(i, doc_labels[i], ctx_weights[i]) for i in range(len(doc_labels)) if doc_labels[i] == 1]
-        assert len(ctx_label_weight) == 2
-        if ctx_label_weight[0][2] < ctx_label_weight[1][2]:
-            head_doc_idx, tail_doc_idx = torch.LongTensor([ctx_label_weight[0][0]]), torch.LongTensor([ctx_label_weight[1][0]])
-        else:
-            head_doc_idx, tail_doc_idx = torch.LongTensor([ctx_label_weight[1][0]]), torch.LongTensor([ctx_label_weight[0][0]])
-        ####################################################
+        ctx_encode, ctx_lens = example['ctx_encode'], example['ctx_lens']
+        doc_num = len(ctx_encode)
         concat_encode = query_encode
         concat_len = query_len
         doc_start_end_pair_list = []
@@ -377,45 +342,35 @@ class HotpotDevDataset(Dataset): ##for dev dataloader
         supp_fact_doc_idx_list = []
         supp_fact_sent_idx_list = []
         ###############################
-        supp_sent_labels_list = []
-        answer_position_list = []
         previous_len = query_len
         concat_sent_num = 0
-        for doc_idx, doc_tup in enumerate(ctx_enocde):
-            doc_encode_ids, doc_weight, doc_len_i, sent_start_end_pair, supp_sent_labels, ctx_with_answer, answer_positions, _ = doc_tup
+        for doc_idx, doc_tup in enumerate(ctx_encode):
+            doc_encode_ids, doc_len_i, sent_start_end_pair, _, _ = doc_tup
+            concat_sent_num = concat_sent_num + len(sent_start_end_pair)
+            sent_lens = sent_lens + [x[1] - x[0] + 1 for x in sent_start_end_pair if x[1] > 0]
+            sent_nums = sent_nums + [len(sent_start_end_pair)]
             # =======================================
             supp_fact_doc_idx_list = supp_fact_doc_idx_list + [doc_idx] * len(sent_start_end_pair)
             supp_fact_sent_idx_list = supp_fact_sent_idx_list + [x for x in range(len(sent_start_end_pair))]
             # =======================================
-            concat_sent_num = concat_sent_num + len(sent_start_end_pair)
-            sent_lens = sent_lens + [x[1] - x[0] + 1 for x in sent_start_end_pair if x[1] > 0]
-            sent_nums = sent_nums + [len(sent_start_end_pair)]
             assert len(doc_encode_ids) == ctx_lens[doc_idx] and len(doc_encode_ids) == doc_len_i \
-                   and doc_len_i == ctx_lens[doc_idx] and len(sent_start_end_pair) == len(supp_sent_labels)
+                   and doc_len_i == ctx_lens[doc_idx]
             concat_encode = concat_encode + doc_encode_ids
             concat_len = concat_len + doc_len_i
             doc_start_end_pair_list.append((previous_len, previous_len + doc_len_i - 1))
             sent_start_end_pair_i = [(x[0] + previous_len, x[1] + previous_len) for x in sent_start_end_pair]
             sent_start_end_pair_list = sent_start_end_pair_list + sent_start_end_pair_i
-            supp_sent_labels_list = supp_sent_labels_list + supp_sent_labels
-            if len(answer_positions) > 0:
-                for a_idx, answer_pos in enumerate(answer_positions):
-                    sent_a_idx, a_start, a_end = answer_pos
-                    sent_off_set = sent_start_end_pair_i[sent_a_idx][0]
-                    temp_position = (sent_off_set + a_start, sent_off_set + a_end)
-                    answer_position_list.append(temp_position)
             previous_len = previous_len + doc_len_i
 
         # +++++++++++++++++++++++++++
-        assert len(supp_fact_doc_idx_list) == len(supp_fact_sent_idx_list) and len(supp_fact_doc_idx_list) == len(supp_sent_labels_list)
+        assert len(supp_fact_doc_idx_list) == len(supp_fact_sent_idx_list) and len(supp_fact_sent_idx_list) == len(sent_lens)
         # +++++++++++++++++++++++++++
         assert doc_start_end_pair_list[-1][1] + 1 == concat_len
-        assert len(doc_labels) == len(doc_start_end_pair_list)
         assert previous_len == len(concat_encode) and previous_len == concat_len
-        assert len(supp_sent_labels_list) == len(sent_start_end_pair_list) and concat_sent_num == len(sent_start_end_pair_list)
         # if not yes_no_question:
         #     answer = example['norm_answer']
         #     assert len(answer_position_list) > 0, 'yes_no: {} {}, {}'.format(yes_no_question, len(answer_position_list), answer)
+
         def position_filter(start_end_pair_list: list):
             filtered_positions = []
             filtered_lens = []
@@ -425,7 +380,7 @@ class HotpotDevDataset(Dataset): ##for dev dataloader
                     p_st, p_en = 0, 0
                 else:
                     p_st = p_st
-                    p_en = self.max_len - 1 if p_en >=self.max_len else p_en
+                    p_en = self.max_len - 1 if p_en >= self.max_len else p_en
                 if p_en == 0:
                     filtered_lens.append(0)
                 else:
@@ -441,7 +396,6 @@ class HotpotDevDataset(Dataset): ##for dev dataloader
             pad_doc_num = self.max_doc_num - doc_num
             doc_start_end_pair_list = doc_start_end_pair_list + [(0, 0)] * pad_doc_num
             ctx_lens = ctx_lens + [0] * pad_doc_num
-            doc_labels = doc_labels + [0] * pad_doc_num
             sent_nums = sent_nums + [0] * pad_doc_num
         ###############################################################################################################
         # print(len(sent_nums))
@@ -473,6 +427,7 @@ class HotpotDevDataset(Dataset): ##for dev dataloader
             # print(ss_attn_mask.shape)
             # print(sd_attn_mask.shape)
             return ss_attn_mask, sd_attn_mask
+
         ss_attn_mask, sd_attn_mask = mask_generation(sent_num_docs=sent_nums, max_sent_num=self.max_sent_num)
         ###############################################################################################################
         # print('sent before', sent_lens)
@@ -487,57 +442,50 @@ class HotpotDevDataset(Dataset): ##for dev dataloader
             pad_sent_num = self.max_sent_num - concat_sent_num
             sent_start_end_pair_list = sent_start_end_pair_list + [(0, 0)] * pad_sent_num
             sent_lens = sent_lens + [0] * pad_sent_num
-            supp_sent_labels_list = supp_sent_labels_list + [0] * pad_sent_num
             ##+++++++++++++++
             supp_fact_doc_idx_list = supp_fact_doc_idx_list + [0] * pad_sent_num
             supp_fact_sent_idx_list = supp_fact_sent_idx_list + [0] * pad_sent_num
             ##+++++++++++++++
-
-        if not yes_no_question:
-            rand_answer_idx = np.random.randint(len(answer_position_list))
-            answer_position = answer_position_list[rand_answer_idx]
-        else:
-            answer_position = (0, 0)
 
         cat_doc_encodes = self.hotpot_tensorizer.token_ids_to_tensor(token_ids=concat_encode)
         cat_doc_attention_mask = self.hotpot_tensorizer.get_attn_mask(token_ids_tensor=cat_doc_encodes)
         if self.global_mask_type == 'query':
             query_mask_idxes = [x for x in range(query_len)]
         elif self.global_mask_type == 'query_doc':
-            query_mask_idxes = [x for x in range(query_len)] + [x[0]  for x in doc_start_end_pair_list] + [x[1] for x in doc_start_end_pair_list]
+            query_mask_idxes = [x for x in range(query_len)] + [x[0] for x in doc_start_end_pair_list] + [x[1] for x in
+                                                                                                          doc_start_end_pair_list]
         elif self.global_mask_type == 'query_doc_sent':
-            query_mask_idxes = [x for x in range(query_len)] + [x[0]  for x in doc_start_end_pair_list] + [x[1] for x in doc_start_end_pair_list] + \
-                               [x[0]  for x in sent_start_end_pair_list] + [x[1] for x in sent_start_end_pair_list]
+            query_mask_idxes = [x for x in range(query_len)] + [x[0] for x in doc_start_end_pair_list] + [x[1] for x in
+                                                                                                          doc_start_end_pair_list] + \
+                               [x[0] for x in sent_start_end_pair_list] + [x[1] for x in sent_start_end_pair_list]
         else:
             query_mask_idxes = [x for x in range(query_len)]
-        cat_doc_global_attn_mask = self.hotpot_tensorizer.get_global_attn_mask(tokens_ids_tensor=cat_doc_encodes, gobal_mask_idxs=query_mask_idxes)
+        cat_doc_global_attn_mask = self.hotpot_tensorizer.get_global_attn_mask(tokens_ids_tensor=cat_doc_encodes,
+                                                                               gobal_mask_idxs=query_mask_idxes)
 
         doc_start_idxes = torch.LongTensor([x[0] for x in doc_start_end_pair_list])
         doc_end_idexes = torch.LongTensor([x[1] for x in doc_start_end_pair_list])
         sent_start_idxes = torch.LongTensor([x[0] for x in sent_start_end_pair_list])
         sent_end_idxes = torch.LongTensor([x[1] for x in sent_start_end_pair_list])
-        answer_start_idx, answer_end_idx = torch.LongTensor([answer_position[0]]), torch.LongTensor([answer_position[1]])
-        doc_lens = torch.LongTensor(ctx_lens)
-        doc_labels = torch.LongTensor(doc_labels)
-        sent_lens = torch.LongTensor(sent_lens)
-        supp_sent_labels = torch.LongTensor(supp_sent_labels_list)
+
         #+++++++++++++++++++++++++++++++++++++++++
         supp_fact_doc_idx = torch.LongTensor(supp_fact_doc_idx_list)
         supp_fact_sent_idx = torch.LongTensor(supp_fact_sent_idx_list)
         #+++++++++++++++++++++++++++++++++++++++++
+
+        doc_lens = torch.LongTensor(ctx_lens)
+        sent_lens = torch.LongTensor(sent_lens)
         ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
         if concat_len > self.max_len:
             concat_len = self.max_len
         ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
         return cat_doc_encodes, cat_doc_attention_mask, cat_doc_global_attn_mask, doc_start_idxes, doc_end_idexes, sent_start_idxes, \
-               sent_end_idxes, answer_start_idx, \
-               answer_end_idx, doc_lens, doc_labels, sent_lens, supp_sent_labels, yes_no_label, head_doc_idx, \
-               tail_doc_idx, ss_attn_mask, sd_attn_mask, supp_fact_doc_idx, supp_fact_sent_idx, concat_len, concat_sent_num
+               sent_end_idxes, doc_lens, sent_lens, ss_attn_mask, sd_attn_mask, supp_fact_doc_idx, supp_fact_sent_idx, concat_len, concat_sent_num
 
     @staticmethod
     def collate_fn(data):
-        batch_max_ctx_len = max([_[20] for _ in data])
-        batch_max_sent_num = max([_[21] for _ in data])
+        batch_max_ctx_len = max([_[13] for _ in data])
+        batch_max_sent_num = max([_[14] for _ in data])
         # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
         batch_ctx_sample = torch.stack([_[0] for _ in data], dim=0)
         batch_ctx_mask_sample = torch.stack([_[1] for _ in data], dim=0)
@@ -555,38 +503,30 @@ class HotpotDevDataset(Dataset): ##for dev dataloader
         batch_sent_starts = batch_sent_starts[:, range(0, batch_max_sent_num)]
         batch_sent_ends = batch_sent_ends[:, range(0, batch_max_sent_num)]
         # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        batch_answer_starts = torch.stack([_[7] for _ in data], dim=0)
-        batch_answer_ends = torch.stack([_[8] for _ in data], dim=0)
         # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        batch_doc_lens = torch.stack([_[9] for _ in data], dim=0)
-        batch_doc_labels = torch.stack([_[10] for _ in data], dim=0)
-        batch_sent_lens = torch.stack([_[11] for _ in data], dim=0)
+        batch_doc_lens = torch.stack([_[7] for _ in data], dim=0)
+        batch_sent_lens = torch.stack([_[8] for _ in data], dim=0)
         batch_sent_lens = batch_sent_lens[:, range(0, batch_max_sent_num)]
-        batch_sent_labels = torch.stack([_[12] for _ in data], dim=0)
-        batch_sent_labels = batch_sent_labels[:, range(0, batch_max_sent_num)]
-        batch_yes_no = torch.stack([_[13] for _ in data], dim=0)
         # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        batch_head_idx = torch.stack([_[14] for _ in data], dim=0)
-        batch_tail_idx = torch.stack([_[15] for _ in data], dim=0)
         # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        batch_ss_attn_mask = torch.stack([_[16] for _ in data], dim=0)
-        batch_sd_attn_mask = torch.stack([_[17] for _ in data], dim=0)
+        batch_ss_attn_mask = torch.stack([_[9] for _ in data], dim=0)
+        batch_sd_attn_mask = torch.stack([_[10] for _ in data], dim=0)
         batch_ss_attn_mask = batch_ss_attn_mask[:, range(0, batch_max_sent_num)][:, :, range(0, batch_max_sent_num)]
         batch_sd_attn_mask = batch_sd_attn_mask[:, :, range(0, batch_max_sent_num)]
         # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        batch_supp_fact_doc_idx = torch.stack([_[18] for _ in data], dim=0)
-        batch_supp_fact_sent_idx = torch.stack([_[19] for _ in data], dim=0)
+        # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        batch_supp_fact_doc_idx = torch.stack([_[11] for _ in data], dim=0)
+        batch_supp_fact_sent_idx = torch.stack([_[12] for _ in data], dim=0)
         batch_supp_fact_doc_idx = batch_supp_fact_doc_idx[:, range(0, batch_max_sent_num)]
         batch_supp_fact_sent_idx = batch_supp_fact_sent_idx[:, range(0, batch_max_sent_num)]
         # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
         res = {'ctx_encode': batch_ctx_sample, 'ctx_attn_mask': batch_ctx_mask_sample,
                'ctx_global_mask': batch_ctx_global_sample, 'doc_start': batch_doc_starts,
                'doc_end': batch_doc_ends, 'sent_start': batch_sent_starts,
-               'sent_end': batch_sent_ends, 'ans_start': batch_answer_starts, 'ans_end': batch_answer_ends,
-               'doc_lens': batch_doc_lens, 'doc_labels': batch_doc_labels, 'sent_lens': batch_sent_lens,
-               'sent_labels': batch_sent_labels, 'yes_no': batch_yes_no, 'head_idx': batch_head_idx, 'fact_doc': batch_supp_fact_doc_idx,
-               'fact_sent': batch_supp_fact_sent_idx, 'tail_idx': batch_tail_idx,
-               'ss_mask': batch_ss_attn_mask, 'sd_mask': batch_sd_attn_mask}
+               'sent_end': batch_sent_ends, 'doc_lens': batch_doc_lens, 'sent_lens': batch_sent_lens,
+               'ss_mask': batch_ss_attn_mask, 'sd_mask': batch_sd_attn_mask, 'fact_doc': batch_supp_fact_doc_idx,
+               'fact_sent': batch_supp_fact_sent_idx}
         return res
 
 ##++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -887,7 +827,7 @@ def data_loader_consistent_checker():
 
 def data_loader_checker():
     file_path = '../data/hotpotqa/distractor_qa'
-    dev_file_name = 'hotpot_dev_distractor_wiki_tokenized.json'
+    dev_file_name = 'hotpot_train_distractor_wiki_tokenized.json'
     from torch.utils.data import DataLoader
     from transformers import LongformerTokenizer
     from multihopQA.longformerQAUtils import PRE_TAINED_LONFORMER_BASE

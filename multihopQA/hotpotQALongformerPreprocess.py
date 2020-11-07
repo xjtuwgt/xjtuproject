@@ -23,7 +23,7 @@ CLS_TOKEN = '<s>'
 END_SENTENCE_TOKEN = '</s>'
 SEP_TOKEN = '</s>'
 
-def Hotpot_Train_Dev_Data_Preprocess(data: DataFrame, tokenizer: LongformerQATensorizer):
+def Hotpot_Train_Data_Preprocess(data: DataFrame, tokenizer: LongformerQATensorizer):
     # ['supporting_facts', 'level', 'question', 'context', 'answer', '_id', 'type']
     """
     Supporting_facts: pair of (title, sentence index) --> (str, int)
@@ -37,15 +37,15 @@ def Hotpot_Train_Dev_Data_Preprocess(data: DataFrame, tokenizer: LongformerQATen
         question, supporting_facts, contexts, answer = row['question'], row['supporting_facts'], row['context'], row['answer']
         doc_title2doc_len = dict([(title, len(text)) for title, text in contexts])
         supporting_facts_filtered = [(supp_title, supp_sent_idx) for supp_title, supp_sent_idx in supporting_facts
-                                     if supp_sent_idx < doc_title2doc_len[supp_title]]
-        positive_titles = set([x[0] for x in supporting_facts_filtered])
-        norm_answer = normalize_text(text=answer)
-        norm_question = normalize_question(question.lower())
-        not_found_flag = False
+                                     if supp_sent_idx < doc_title2doc_len[supp_title]] ##some supporting facts are out of sentence index
+        positive_titles = set([x[0] for x in supporting_facts_filtered]) ## get postive document titles
+        norm_answer = normalize_text(text=answer) ## normalize the answer (add a space between the answer)
+        norm_question = normalize_question(question.lower()) ## normalize the question by removing the question mark
+        not_found_flag = False ## some answer might be not founded in supporting sentence
         ################################################################################################################
-        pos_doc_num = len(positive_titles)
+        pos_doc_num = len(positive_titles) ## number of positive documents
         pos_ctxs, neg_ctxs = [], []
-        for ctx_idx, ctx in enumerate(contexts): ## Original ctx index
+        for ctx_idx, ctx in enumerate(contexts): ## Original ctx index, record the original index order
             title, text = ctx[0], ctx[1]
             text_lower = [normalize_text(text=sent) for sent in text]
             if title in positive_titles:
@@ -179,8 +179,8 @@ def Hotpot_Train_Dev_Data_Preprocess(data: DataFrame, tokenizer: LongformerQATen
     return data
 
 #########+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-def Hotpot_Test_Data_PreProcess(data: DataFrame, tokenizer: LongformerQATensorizer):
-    # ['supporting_facts', 'level', 'question', 'context', 'answer', '_id', 'type']
+def Hotpot_Dev_Test_Data_PreProcess(data: DataFrame, tokenizer: LongformerQATensorizer):
+    # ['question', 'context', '_id']
     """
     Supporting_facts: pair of (title, sentence index) --> (str, int)
     Level: {easy, medium, hard}
@@ -309,17 +309,17 @@ def hotpotqa_preprocess_example():
     tokenizer = LongformerTokenizer.from_pretrained(PRE_TAINED_LONFORMER_BASE, do_lower_case=True)
     longformer_tokenizer = LongformerQATensorizer(tokenizer=tokenizer, max_length=-1)
     dev_data, _ = HOTPOT_DevData_Distractor()
-    dev_test_data = Hotpot_Test_Data_PreProcess(data=dev_data, tokenizer=longformer_tokenizer)
+    dev_test_data = Hotpot_Dev_Test_Data_PreProcess(data=dev_data, tokenizer=longformer_tokenizer)
     print('Get {} dev-test records'.format(dev_test_data.shape[0]))
     dev_test_data.to_json(os.path.join(abs_distractor_wiki_path, 'hotpot_test_distractor_wiki_tokenized.json'))
     print('*' * 75)
     dev_data, _ = HOTPOT_DevData_Distractor()
-    dev_data = Hotpot_Train_Dev_Data_Preprocess(data=dev_data, tokenizer=longformer_tokenizer)
+    dev_data = Hotpot_Dev_Test_Data_PreProcess(data=dev_data, tokenizer=longformer_tokenizer)
     print('Get {} dev records'.format(dev_data.shape[0]))
     dev_data.to_json(os.path.join(abs_distractor_wiki_path, 'hotpot_dev_distractor_wiki_tokenized.json'))
     print('*' * 75)
     train_data, _ = HOTPOT_TrainData()
-    train_data = Hotpot_Train_Dev_Data_Preprocess(data=train_data, tokenizer=longformer_tokenizer)
+    train_data = Hotpot_Train_Data_Preprocess(data=train_data, tokenizer=longformer_tokenizer)
     print('Get {} training records'.format(train_data.shape[0]))
     train_data.to_json(os.path.join(abs_distractor_wiki_path, 'hotpot_train_distractor_wiki_tokenized.json'))
     print('Runtime = {:.4f} seconds'.format(time() - start_time))
